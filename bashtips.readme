@@ -1,0 +1,370 @@
+https://www.ifokr.org/bri/presentations/seagl-2021-good-shell-patterns/
+
+Ø
+Good Shell Patterns
+Bri Hatch	Personal	Work
+Onsight, Inc
+bri@ifokr.org	ExtraHop Networks
+bri@extrahop.com
+
+Copyright 2021, Bri Hatch, Creative Commons BY-NC-SA License
+Debugging with set -x
+set -x
+$ cat script.sh
+#!/bin/bash
+echo "Hello World"
+date
+
+$ ./script.sh
+Hello World
+Fri 05 Nov 2021 10:32:00 PM UTC
+
+$ sh -x ./script.sh
++ echo Hello World
+Hello World
++ date
+Fri 05 Nov 2021 10:32:08 PM UTC
+Debugging with set -x (cont)
+$ nl -ba script.sh
+1    #!/bin/bash
+2    echo "Hello World"
+3    set -x
+4    date
+5    set +x
+6    echo "Debugging is off again"
+
+$ ./script.sh
+Hello World
++ date
+Fri 05 Nov 2021 10:35:43 PM UTC
++set +x
+Debugging is off again
+Requiring variable initialization with set -u
+$ cat script.sh
+#!/bin/bash
+
+
+echo "Hello $USER!"
+echo "Your home dir is $HOME!"
+echo "You logged in from $SSH_CLIENT"
+
+$ ./cat script.sh
+Hello wendell!
+Your home dir is /home/wendell
+You logged in from
+
+$ echo $?
+1
+Requiring variable initialization with set -u (cont)
+$ cat script.sh
+#!/bin/bash
+
+set -u
+echo "Hello $USER!"
+echo "Your home dir is $HOME!"
+echo "You logged in from $SSH_CLIENT"
+
+$ ./cat script.sh
+Hello wendell!
+Your home dir is /home/wendell
+script.sh line 5: SSH_CLIENT: unbound variable
+
+$ echo $?
+1
+Setting default variable values
+$ cat script.sh
+#!/bin/bash
+
+set -u
+echo "Hello $USER!"
+echo "Your home dir is $HOME!"
+echo "You logged in from ${SSH_CLIENT:-something other than ssh}"
+
+$ ./cat script.sh
+Hello wendell!
+Your home dir is /home/wendell
+You logged in from something other than ssh
+Bash Parameter Expansion
+Parameter Expansion is powerful
+${variable:-value}
+use value if $variable is not set
+${variable:=value}
+same, but also set $variable to value if not set
+Many other options, including substrings, substitutions.
+
+Warning: Use only where it improves readability!
+
+Die Die Die with set -e
+set -e causes processing to stop immediately if a command in your script fails.
+Allows you to remove a lot of if...then logic
+
+#!/bin/bash
+...
+if ! touch "$tmpfile" ; then
+    echo "Could not create $tmpfile"
+fi
+...
+vs
+#!/bin/bash
+set -e
+...
+touch "$tmpfile"
+
+Ignoring errors when using set -e
+You can 'ignore' errors when using set -e
+#!/bin/bash
+set -e
+
+echo -n "What file should I create?"
+read filename
+
+# Use "or true"
+rm "$filename" || true
+
+# or use "force" features if available 
+rm -f "$filename"
+pipefail
+set -e only looks at the rightmost command exit status. Use set -o pipefail to bail on command failures in pipelines too.
+#!/bin/bash
+set -e
+set -o pipefail
+
+echo -n "Who's logged into the console? "
+w | grep " :0 " | awk '{print $1}'
+
+...
+If no one is logged in on console the code will stop at the w line because grep will fail.
+Cleaning up
+Cleaning up after yourself using trap
+#!/bin/bash
+set -o
+set -e
+
+tmpfile=""
+cleanup () {
+    if [ -f "$tmpfile" ] ; then
+        rm "$tmpfile"
+    fi
+}
+trap cleanup EXIT
+
+tmpfile=$(mktemp)
+...
+
+Trapping other signals
+#!/bin/bash
+breaks_required=3
+warn () {
+    if [ "$breaks_required" -gt 0 ] ; then
+        echo "Quitting this process is not a good idea." >&2
+        echo "Hit <ctrl-c>> $breaks_required more times to really quit." >&2
+        breaks_required=$(( $breaks_required - 1 ))
+    else
+        exit 1
+    fi
+}
+trap warn INT
+
+while : ; do
+    sleep 20  # This process is killed when you <ctrl-c> !!
+    echo sleeping again
+done
+Provide Exit Messages with trap
+#!/bin/bash
+
+atexit () {
+    if [ $? -eq 0 ] ; then
+        echo "Success!" >&2
+    else
+        echo "SCRIPT FAILURE!" >&2
+    fi
+    # Script will still exit with whatever status
+    # it was going to use
+}
+trap atexit EXIT
+
+# Exit 0, 1, or 2 randomly
+exit $(( $(date +%s) % 3 ))
+Going to the source
+Option 1: make a variable that captures source directory
+#!/bin/bash
+
+TOP=$(dirname "$0")
+
+file1=$1
+file2=$2
+
+# include some related code
+source "$TOP"/some_config.sh
+
+# call some program by reference
+"$TOP"/../otherscripts/tool.sh
+
+Going to the source (cont)
+Option 2: cd to source directory
+#!/bin/bash
+
+# stash the full pathname to the filename args we're sent
+file1=$(realpath $1)
+file2=$(realpath $2)
+
+# Go to our software's directory
+cd $(dirname "$0")
+
+# include some related code
+source ./some_config.sh
+
+# call some program by reference
+../otherscripts/tool.sh
+Dates and Logs
+Always use sensible date formats....
+#!/bin/bash
+now () {
+    echo $(date +"%Y-%m-%d-%H:%M:%S")
+}
+log () {
+    echo -n $(now) "$1: "
+    shift
+    echo "$@" >&2
+}
+info () { log "   INFO" "$@"
+}
+warn () { log "WARNING" "$@"
+}
+
+info "Script starting"
+sleep 20
+info "20 seconds passed"
+warn "But in covid, time has no meaning."
+Dates and Logs (cont)
+$ ./script.sh
+2021-11-05-10:49:00    INFO: Script starting
+2021-11-05-10:49:20    INFO: 20 seconds passed
+2021-11-05-10:49:20 WARNING: But in covid, time has no meaning.
+Usage
+Output useful usage on problems
+#!/bin/bash
+usage () {
+    cat <<EOM >&2
+Usage: $0 [-n] filename [filename ...]
+
+This script frobs files, unless the -n flag is set.
+EOM
+    if [ "$#" -gt 0 ] ; then
+        echo "ERROR: $@" >&2
+    fi
+    exit 1
+}
+
+if [ $# -lt 1 ] ; then
+    usage Need one or more filenames
+fi
+...
+Getopts
+getopts for user friendly command line options
+while getopts hH:dv c; do
+    case "$c" in
+        h)     usage;;
+        H)     hostname=$OPTARG;;
+        d)     debug=1;;
+        v)     verbose=1;;
+    esac
+done
+
+$ ./script.sh -H baggsend -v
+getopts (cont)
+But it's pretty crufty
+No --long options
+No option bundling
+Kludgy use of magic variables like $OPTIND
+Good Practice
+Good Practices
+Run your code through shellcheck
+Use >&2 to send debug info to stderr
+Remember when shell is no longer the right tool:
+Bash arrays
+Complex commandline parsing
+Concurrency
+Needing the man page
+Thanks!
+Presentation: https://www.ifokr.org/bri/presentations/seagl-2021-good-shell-patterns/
+Personal	Work
+Bri Hatch
+Onsight, Inc
+bri@ifokr.org	
+Bri Hatch
+ExtraHop Networks
+bri@extrahop.com
+Copyright 2021, Bri Hatch, Creative Commons BY-NC-SA License
+
+Bonus Slides!
+20 minutes is great, but sometimes I just can't stop....
+Bonus Slides - color
+for color in $(seq 0 255); do
+    tput setaf $color
+    echo $color looks like this
+done | less -R
+tput sgr0  # Reset all the things
+
+0 looks like this
+1 looks like this
+2 looks like this
+3 looks like this
+4 looks like this
+5 looks like this
+6 looks like this
+7 looks like this
+man terminfo for all options, including highlighting. See Color lists for full list, Run tput colors to see how many are available. TERM=xterm-256color may give you more....
+Environment vars
+You can set or override enviroment variables for a command without changing your own
+$ SSH_AUTH_SOCK='' ssh remoteserver
+
+$ date
+Fri 05 Nov 2021  3:52:00 PM PDT
+
+$ TZ=UTC date
+Fri 05 Nov 2021 10:52:00 PM UTC
+
+Job Control
+If you don't use job control, start!
+Bad:
+$ vi script.sh   # make changes
+:wq
+
+$ ./script.sh    # check it
+
+$ vi script.sh   # make changes
+:wq
+
+$ ./script.sh
+Job Control (cont)
+Good
+$ vi script.sh   # make changes
+:w               # write changes
+<ctrl-z>         # drop back to shell
+
+$ ./script.sh    # check it
+
+$ fg             # back in vim where you were
+                 # same buffers, undo, etc
+                 
+                 # make more changes
+:w               # write changes
+<ctrl-z>         # drop back to shell
+$ ./script.sh    # check it
+Related: jobs, bg, fg %jobnum
+Exit status in prompt
+Include your exit status in your prompt!
+$ PS1='$? \u@\h:\w
+\$ '
+
+0 wendell@baggsend:/home/wendell/scripts
+$ true
+
+0 wendell@baggsend:/home/wendell/scripts
+$ false
+
+1 wendell@baggsend:/home/wendell/scripts
+$ 
+Don't do this
+:(){:|:&};: 
